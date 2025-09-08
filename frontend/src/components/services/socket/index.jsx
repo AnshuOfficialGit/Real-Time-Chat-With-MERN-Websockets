@@ -24,11 +24,16 @@ const onReceiveMessage = (callback) => {
   socket.on("receive_message", callback);
 };
 
+const isOnline = async (data) => {
+  await socket.on("is_online", data);
+};
+
 const ChatService = {
   socket,
   sendMessages,
   getMessages,
   onReceiveMessage,
+  isOnline,
 };
 
 export default ChatService;

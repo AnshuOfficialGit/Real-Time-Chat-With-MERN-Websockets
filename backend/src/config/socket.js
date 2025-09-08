@@ -17,6 +17,7 @@ function setupSocket(server) {
     socket.on("join", (userId) => {
       socket.join(userId);
       console.log(`User ${userId} joined their room`);
+      io.emit("user_online", { userId });
     });
 
     socket.on("send_messages", async (data) => {
@@ -30,11 +31,30 @@ function setupSocket(server) {
       };
 
       const messageSend = await Chat.create(chatData);
-
-      // Emit only to the receiver
       io.to(receiver_id).emit("receive_message", messageSend);
+    });
 
-      // Do NOT emit to sender (sender already has temp message)
+    socket.on("is_typing", (data) => {
+      const { receiver_id, sender_id } = data;
+      console.log(`Typing event from ${sender_id} to ${receiver_id}`);
+
+      // Notify the receiver that sender is typing
+      io.to(receiver_id).emit("user_typing", {
+        senderId: sender_id,
+        isTyping: true,
+      });
+
+      // Auto-clear typing status after 3 seconds of inactivity
+      setTimeout(() => {
+        io.to(receiver_id).emit("user_typing", {
+          senderId: sender_id,
+          isTyping: false,
+        });
+      }, 3000);
+    });
+
+    socket.on("disconnect", () => {
+      console.log(`User disconnected: ${socket.id}`);
     });
   });
 

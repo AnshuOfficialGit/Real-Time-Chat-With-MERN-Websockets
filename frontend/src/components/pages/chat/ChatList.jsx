@@ -6,20 +6,47 @@ import UserService from "../../services/users/UserService";
 import ChatService from "../../services/socket";
 import loginImage from "../../../assets/login-img.png";
 import moment from "moment";
-
+import { io } from "socket.io-client";
+import { wsURL } from "../../axios/endPoint";
 const ChatList = () => {
-  const { id } = useParams();
-  const senderId = JSON.parse(localStorage.getItem("user"));
+  const { id } = useParams(); // receiver_id
+  const senderId = JSON.parse(localStorage.getItem("user")); // logged-in user ID
 
-  const [users, setUsers] = useState([]);
+  const [users, setUsers] = useState({});
   const [chatMessages, setChatMessages] = useState([]);
+  const [isTyping, setIsTyping] = useState(false);
+  const [isOnline, setIsOnline] = useState(false);
   const chatContainerRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  // const [isConnected, setIsConnected] = useState(false);
 
+  const updateSocket = async (id) => {
+    try {
+      const data = {
+        socket_id: id,
+      };
+      await UserService.updateSocketService(data);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  useEffect(() => {
+    const socket = io(wsURL, {
+      transports: ["websocket"],
+    });
+    socket.on("connect", () => {
+      updateSocket(socket.id);
+    });
+    socket.on("disconnect", () => {});
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
   const fetchUsers = async () => {
     try {
       const response = await UserService.getUser(id);
-      // console.log(response.data.data);
-      setUsers(response?.data?.data || []);
+      setUsers(response?.data?.data || {});
     } catch (error) {
       console.error(error);
     }
@@ -34,7 +61,6 @@ const ChatList = () => {
     }
   };
 
-  // Scroll chat to bottom
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop =
@@ -42,12 +68,47 @@ const ChatList = () => {
     }
   }, [chatMessages]);
 
-  // Join socket room for this user
   useEffect(() => {
     ChatService.socket.emit("join", senderId);
+    ChatService.socket.emit("user_online", { userId: senderId });
+
+    return () => {
+      ChatService.socket.emit("user_offline", { userId: senderId });
+    };
   }, [senderId]);
 
-  // Listen for incoming messages
+  useEffect(() => {
+    const handleUserOnline = (data) => {
+      if (data.userId.toString() === id.toString()) setIsOnline(true);
+    };
+
+    const handleUserOffline = (data) => {
+      if (data.userId.toString() === id.toString()) setIsOnline(false);
+    };
+
+    const handleTyping = (data) => {
+      if (data.senderId.toString() === id.toString()) {
+        setIsTyping(data.isTyping);
+
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
+        typingTimeoutRef.current = setTimeout(() => {
+          setIsTyping(false);
+        }, 3000);
+      }
+    };
+
+    ChatService.socket.on("user_online", handleUserOnline);
+    ChatService.socket.on("user_offline", handleUserOffline);
+    ChatService.socket.on("user_typing", handleTyping);
+
+    return () => {
+      ChatService.socket.off("user_online", handleUserOnline);
+      ChatService.socket.off("user_offline", handleUserOffline);
+      ChatService.socket.off("user_typing", handleTyping);
+    };
+  }, [id]);
+
   useEffect(() => {
     const handleMessage = (msg) => {
       const isRelevant =
@@ -61,7 +122,6 @@ const ChatList = () => {
 
     ChatService.onReceiveMessage(handleMessage);
 
-    // Cleanup old listener
     return () => {
       ChatService.socket.off("receive_message", handleMessage);
     };
@@ -72,7 +132,6 @@ const ChatList = () => {
     fetchMessages();
   }, [id]);
 
-  // Formik for sending messages
   const formik = useFormik({
     enableReinitialize: true,
     initialValues: {
@@ -86,7 +145,6 @@ const ChatList = () => {
     onSubmit: (values, { resetForm }) => {
       if (!values.message) return;
 
-      // Temporary message for instant UI feedback
       const tempMessage = {
         ...values,
         tempId: Date.now(),
@@ -94,13 +152,19 @@ const ChatList = () => {
       };
 
       setChatMessages((prev) => [...prev, tempMessage]);
-
-      // Send message to server
       ChatService.sendMessages(values);
-
       resetForm();
     },
   });
+
+  const handleTypingEvent = (e) => {
+    formik.handleChange(e);
+    ChatService.socket.emit("is_typing", {
+      sender_id: senderId,
+      receiver_id: id,
+      isTyping: true,
+    });
+  };
 
   return (
     <div
@@ -108,39 +172,37 @@ const ChatList = () => {
       style={{ height: "75vh", width: "90%" }}
     >
       <div className="row h-100">
-        {/* User List */}
-        <div className="col-3 border-end bg-light p-3 d-flex flex-column">
+        <div className="col-3 border-end bg-light p-3 d-flex flex-column align-items-center">
           <h5 className="mb-3 text-center">Chat With</h5>
 
-          {/* Chat Partner Info */}
-          <div className="text-center mb-4">
-            <img
-              src={loginImage}
-              alt="asdf"
-              className="rounded-circle mb-2"
-              width="80"
-              height="80"
-            />
-            <h5>{users.name}</h5>
-            <p className="mb-1">
-              <strong>Email:</strong> {users.email}
-            </p>
-            <p>
-              <strong>Mobile:</strong> {users.mobile}
-            </p>
-          </div>
+          <img
+            src={loginImage}
+            alt="avatar"
+            className="rounded-circle mb-2"
+            width="80"
+            height="80"
+          />
+          <h5>{users.name}</h5>
+          <p>
+            <strong>Email:</strong> {users.email}
+          </p>
+          <p>
+            <strong>Mobile:</strong> {users.mobile}
+          </p>
+          <small
+            className={`badge ${isOnline ? "bg-success" : "bg-secondary"}`}
+          >
+            {/* {isOnline ? "Online" : "Offline"} */}
+          </small>
         </div>
 
-        {/* Chat Messages */}
         <div className="col-9 d-flex flex-column p-3">
-          <div className="d-flex align-items-center justify-content-between border-bottom pb-2 mb-2">
-            <div>
-              <h6 className="mb-0">
-                Chat with <b>{users.name}</b>
-              </h6>
-              <small className="text-success">Online</small>
-            </div>
-            <button className="btn btn-sm btn-outline-secondary">⋮</button>
+          <div className="d-flex justify-content-between align-items-center border-bottom mb-2 pb-2">
+            <h6>
+              Chatting with <b>{users.name}</b>
+              <br />
+              {isTyping && <small className="text-success">Typing...</small>}
+            </h6>
           </div>
 
           <div
@@ -149,20 +211,20 @@ const ChatList = () => {
             style={{ maxHeight: "55vh" }}
           >
             {chatMessages.map((msg, index) => {
-              const isSentByLoggedInUser =
+              const isSentByUser =
                 msg.sender_id.toString() === senderId.toString();
               return (
                 <div
                   key={msg.tempId || msg._id || index}
                   className={`d-flex mb-2 ${
-                    isSentByLoggedInUser
+                    isSentByUser
                       ? "justify-content-end"
                       : "justify-content-start"
                   }`}
                 >
                   <div
                     className={`p-2 rounded ${
-                      isSentByLoggedInUser
+                      isSentByUser
                         ? "bg-secondary text-dark"
                         : "bg-primary text-white"
                     }`}
@@ -170,9 +232,7 @@ const ChatList = () => {
                     {msg.message}
                     <br />
                     <small
-                      className={`${
-                        isSentByLoggedInUser ? "text-dark" : "text-white"
-                      }`}
+                      className={isSentByUser ? "text-dark" : "text-white"}
                     >
                       {msg.chat_time}
                     </small>
@@ -182,23 +242,18 @@ const ChatList = () => {
             })}
           </div>
 
-          <form onSubmit={formik.handleSubmit} autoComplete="off">
-            <div className="input-group">
-              <input
-                type="text"
-                className="form-control"
-                placeholder="Type a message..."
-                name="message"
-                onChange={formik.handleChange}
-                value={formik.values.message}
-              />
-              <button type="submit" className="btn btn-primary">
-                Send
-              </button>
-            </div>
-            {formik.errors.message && (
-              <span className="text-danger">{formik.errors.message}</span>
-            )}
+          <form onSubmit={formik.handleSubmit} className="d-flex">
+            <input
+              type="text"
+              name="message"
+              className="form-control me-2"
+              placeholder="Type your message"
+              onChange={handleTypingEvent}
+              value={formik.values.message}
+            />
+            <button type="submit" className="btn btn-primary">
+              Send
+            </button>
           </form>
         </div>
       </div>
